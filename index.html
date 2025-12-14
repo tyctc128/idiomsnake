@@ -1,0 +1,1419 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>成語貪食蛇</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+    <!-- Noto Sans TC (Chinese Font) -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@100..900&display=swap" rel="stylesheet">
+    
+    <!-- React & Babel CDNs -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Firebase CDN Imports -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+        import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+        import { getFirestore, collection, query, where, getDocs, onSnapshot, updateDoc, doc, orderBy, limit, setDoc, serverTimestamp, getDoc, addDoc, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+        
+        // Expose Firebase functions globally for the Babel script
+        window.FirebaseServices = {
+            initializeApp, getAuth, signInAnonymously, onAuthStateChanged, 
+            getFirestore, collection, query, where, getDocs, onSnapshot, 
+            updateDoc, doc, orderBy, limit, setDoc, serverTimestamp, 
+            getDoc, addDoc, runTransaction
+        };
+    </script>
+
+    <style>
+        /* Custom Styles and Font Setup */
+        :root {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+        }
+
+        /* Custom animation (copied from previous React config) */
+        @keyframes fade-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fade-in 0.5s ease-out forwards;
+        }
+        @keyframes bounce-in {
+            0% { transform: scale(0.5); opacity: 0; }
+            70% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); }
+        }
+        .animate-bounce-in {
+            animation: bounce-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+        }
+        /* Style for the button DButton */
+        .d-button {
+            box-shadow: 0 4px 0 rgb(202, 138, 4);
+            transition: all 0.1s;
+        }
+        .d-button:active {
+            box-shadow: none;
+            transform: translateY(4px);
+        }
+
+        /* Ensure Canvas is contained and responsive */
+        #game-canvas-container {
+            width: 100%;
+            /* 4/3 Aspect Ratio */
+            aspect-ratio: 4/3; 
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body class="bg-orange-50">
+    <div id="root">
+        <!-- React App renders here -->
+    </div>
+
+    <!-- Main Application Script (JSX/Babel) -->
+    <script type="text/babel">
+        // Global variables from CDNs
+        const { useState, useEffect, useRef, useCallback } = React;
+        const { createRoot } = ReactDOM;
+        
+        // Global variables from Firebase module script
+        let initializeApp, getAuth, signInAnonymously, onAuthStateChanged, 
+            getFirestore, collection, query, where, getDocs, onSnapshot, 
+            updateDoc, doc, orderBy, limit, setDoc, serverTimestamp, 
+            getDoc, addDoc, runTransaction;
+
+        // Wait for module script to load and populate globals
+        window.addEventListener('load', () => {
+             ({
+                initializeApp, getAuth, signInAnonymously, onAuthStateChanged, 
+                getFirestore, collection, query, where, getDocs, onSnapshot, 
+                updateDoc, doc, orderBy, limit, setDoc, serverTimestamp, 
+                getDoc, addDoc, runTransaction
+             } = window.FirebaseServices);
+
+             // Start the React App once services are ready
+             const root = createRoot(document.getElementById('root'));
+             root.render(<App />);
+        });
+
+
+        // --- Firebase Initialization (Standalone Config) ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyDn-BnnFVq-qLIXKZWRg8hihbtRR2GFlb0",
+            authDomain: "idiomsnake-cba9e.firebaseapp.com",
+            projectId: "idiomsnake-cba9e",
+            storageBucket: "idiomsnake-cba9e.firebasestorage.app",
+            messagingSenderId: "694669821682",
+            appId: "1:694669821682:web:63d3b0b4c32885bd2eb26b"
+        };
+        
+        let app, auth, db;
+        
+        const initFirebase = () => {
+            if (typeof initializeApp !== 'function') {
+                console.error("Firebase services not loaded yet.");
+                return;
+            }
+            if (!app) {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+            }
+        }
+
+
+        // --- Constants & Config ---
+        const GRID_SIZE = 30; // 格子大小
+        const CANVAS_WIDTH_PC = 600; // 20格寬
+        const CANVAS_HEIGHT_PC = 450; // 15格高
+        const GAME_SPEED = 150; // ms per frame
+
+        // Colors
+        const COLORS = {
+            bg: '#FFFDF5', 
+            grid: '#E5E7EB',
+            snakeHead: '#10B981', 
+            snakeBody: '#34D399', 
+            food: '#F59E0B', 
+            foodText: '#FFFFFF',
+            text: '#374151',
+            wallHit: '#EF4444',
+        };
+
+        // Sound Synthesizer (No external files needed)
+        const playSound = (type) => {
+          try {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContext) return;
+            const ctx = new AudioContext();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            const now = ctx.currentTime;
+            
+            if (type === 'eat') {
+              osc.type = 'sine';
+              osc.frequency.setValueAtTime(600, now);
+              osc.frequency.exponentialRampToValueAtTime(1000, now + 0.1);
+              gain.gain.setValueAtTime(0.5, now);
+              gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+              osc.start(now);
+              osc.stop(now + 0.1);
+            } else if (type === 'wrong') {
+              osc.type = 'sawtooth';
+              osc.frequency.setValueAtTime(150, now);
+              osc.frequency.linearRampToValueAtTime(100, now + 0.3);
+              gain.gain.setValueAtTime(0.5, now);
+              gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+              osc.start(now);
+              osc.stop(now + 0.3);
+            } else if (type === 'faint') {
+              osc.type = 'square';
+              osc.frequency.setValueAtTime(200, now);
+              osc.frequency.exponentialRampToValueAtTime(50, now + 0.5);
+              gain.gain.setValueAtTime(0.5, now);
+              gain.gain.linearRampToValueAtTime(0.01, now + 0.5);
+              osc.start(now);
+              osc.stop(now + 0.5);
+            } else if (type === 'win') {
+              osc.type = 'triangle';
+              osc.frequency.setValueAtTime(400, now);
+              osc.frequency.setValueAtTime(600, now + 0.1);
+              osc.frequency.setValueAtTime(1000, now + 0.2);
+              gain.gain.setValueAtTime(0.3, now);
+              gain.gain.linearRampToValueAtTime(0.01, now + 0.6);
+              osc.start(now);
+              osc.stop(now + 0.6);
+            }
+          } catch (e) {
+            console.error("Audio play failed", e);
+          }
+        };
+
+        // --- Simplified Icon Components (replacing lucide-react) ---
+        const Icon = ({ children, size = 20, className = 'text-current' }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                {children}
+            </svg>
+        );
+
+        const Trophy = (props) => (
+            <Icon {...props}><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M12 15V9"/><path d="M12 2C9.24 2 7 4.24 7 7v3H5a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2h-2V7c0-2.76-2.24-5-5-5z"/></Icon>
+        );
+        const Settings = (props) => (
+            <Icon {...props}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.44a2 2 0 0 1-1.42 1.42l-.44.22a2 2 0 0 0-1 3.46l.22.44a2 2 0 0 1-.77 1.46l-.22.44a2 2 0 0 0-1 3.46l.44.22a2 2 0 0 1 1.42 1.42v.44a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.44a2 2 0 0 1 1.42-1.42l.44-.22a2 2 0 0 0 1-3.46l-.22-.44a2 2 0 0 1 .77-1.46l.22-.44a2 2 0 0 0 1-3.46l-.44-.22a2 2 0 0 1-1.42-1.42V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></Icon>
+        );
+        const Play = (props) => (
+            <Icon {...props}><polygon points="5 3 19 12 5 21 5 3"/></Icon>
+        );
+        const ArrowUp = (props) => (
+            <Icon {...props}><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></Icon>
+        );
+        const ArrowDown = (props) => (
+            <Icon {...props}><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></Icon>
+        );
+        const ArrowLeft = (props) => (
+            <Icon {...props}><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></Icon>
+        );
+        const ArrowRight = (props) => (
+            <Icon {...props}><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></Icon>
+        );
+        const RotateCcw = (props) => (
+            <Icon {...props}><path d="M3 14s8-8 10-8 9 3 9 3"/><path d="M17 2v5h5"/></Icon>
+        );
+        const ChevronDown = (props) => (
+            <Icon {...props}><path d="M6 9l6 6 6-6"/></Icon>
+        );
+        const ChevronUp = (props) => (
+            <Icon {...props}><path d="M18 15l-6-6-6 6"/></Icon>
+        );
+        const Upload = (props) => (
+            <Icon {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></Icon>
+        );
+        const AlertCircle = (props) => (
+            <Icon {...props}><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></Icon>
+        );
+        const Edit2 = (props) => (
+            <Icon {...props}><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5l-4.5 1 1-4.5L17 3z"/></Icon>
+        );
+        const Save = (props) => (
+            <Icon {...props}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l4 4v12a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></Icon>
+        );
+        const X = (props) => (
+            <Icon {...props}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Icon>
+        );
+        const Plus = (props) => (
+            <Icon {...props}><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></Icon>
+        );
+        const Trash2 = (props) => (
+            <Icon {...props}><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 4h6"/></Icon>
+        );
+        
+        // --- Game Types (Adapted for plain JS/JSX) ---
+        // Types are implicitly handled by the code, comments are for reference
+        // type Question = { idiom: string; def: string; };
+        // type Session = { id: string; name: string; isActive: boolean; questions: Question[]; };
+        // type LeaderboardEntry = { id?: string; nickname: string; score: number; uid: string; };
+        // type GameState = 'MENU' | 'PLAYING' | 'STUNNED' | 'GAME_OVER' | 'VICTORY';
+
+
+        // --- Main Component ---
+        function App() {
+            initFirebase(); // Initialize Firebase instances
+            const [user, setUser] = useState(null);
+            const [view, setView] = useState('HOME');
+            const [currentSession, setCurrentSession] = useState(null);
+
+            // Auth Init & Listener
+            useEffect(() => {
+                if (!auth) return;
+                const initAuth = async () => {
+                    try {
+                        await signInAnonymously(auth);
+                    } catch (error) {
+                        console.error("Auth Error", error);
+                    }
+                };
+                initAuth();
+                return onAuthStateChanged(auth, setUser);
+            }, []);
+
+            // Fetch Active Session Logic
+            useEffect(() => {
+                if (!user || !db || typeof onSnapshot !== 'function') return;
+                const q = query(
+                    collection(db, 'sessions'),
+                    where('isActive', '==', true)
+                );
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    if (!snapshot.empty) {
+                        const docData = snapshot.docs[0].data();
+                        setCurrentSession({ id: snapshot.docs[0].id, ...docData });
+                    } else {
+                        setCurrentSession(null);
+                    }
+                }, (err) => console.error("Error fetching session:", err));
+                return unsubscribe;
+            }, [user]);
+
+            if (!user) return <div className="flex h-screen items-center justify-center bg-yellow-50 text-orange-500 font-bold text-xl">載入中...</div>;
+
+            return (
+                <div className="min-h-screen bg-orange-50 font-sans selection:bg-yellow-200">
+                    {/* Header */}
+                    <header className="bg-yellow-400 p-4 shadow-md border-b-4 border-yellow-500 flex justify-between items-center sticky top-0 z-10">
+                        <h1 className="text-2xl font-black text-white drop-shadow-md tracking-wider flex items-center gap-2">
+                            🐍 成語貪食蛇
+                        </h1>
+                        <div className="flex gap-2">
+                            {view !== 'HOME' && (
+                                <button 
+                                    onClick={() => setView('HOME')}
+                                    className="p-2 bg-white rounded-xl shadow-sm hover:scale-105 transition-transform text-orange-500 font-bold text-sm"
+                                >
+                                    回首頁
+                                </button>
+                            )}
+                            <button 
+                                onClick={() => setView('ADMIN')}
+                                className="p-2 bg-yellow-600 rounded-xl text-white shadow-sm hover:bg-yellow-700 transition"
+                            >
+                                <Settings size={20} />
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Main Content Area */}
+                    <main className="max-w-4xl mx-auto p-4">
+                        {view === 'HOME' && (
+                            <div className="flex flex-col items-center justify-center space-y-8 mt-10 animate-fade-in">
+                                <div className="bg-white p-8 rounded-3xl shadow-xl border-4 border-yellow-200 text-center w-full max-w-md">
+                                    <h2 className="text-3xl font-bold text-gray-700 mb-2">準備好了嗎？</h2>
+                                    <p className="text-gray-500 mb-6">依據解釋，吃出正確的成語！</p>
+                                    
+                                    {currentSession ? (
+                                        <div className="space-y-4">
+                                            <div className="bg-green-100 text-green-700 px-4 py-2 rounded-lg font-bold">
+                                                當前場次：{currentSession.name}
+                                            </div>
+                                            <button 
+                                                onClick={() => setView('GAME')}
+                                                className="w-full py-4 bg-gradient-to-b from-green-400 to-green-500 hover:from-green-500 hover:to-green-600 text-white rounded-2xl shadow-[0_4px_0_rgb(21,128,61)] active:shadow-none active:translate-y-1 transition-all text-xl font-black flex items-center justify-center gap-3"
+                                            >
+                                                <Play fill="currentColor" /> 開始遊戲
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="bg-red-100 text-red-500 p-4 rounded-xl font-bold">
+                                            目前沒有開放的遊戲場次，請稍後再試。
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                <button 
+                                    onClick={() => setView('LEADERBOARD')}
+                                    className="flex items-center gap-2 text-yellow-600 font-bold hover:bg-yellow-100 px-4 py-2 rounded-full transition"
+                                >
+                                    <Trophy size={20} /> 查看排行榜
+                                </button>
+                            </div>
+                        )}
+
+                        {view === 'ADMIN' && <AdminPanel onBack={() => setView('HOME')} user={user} />}
+                        
+                        {view === 'GAME' && currentSession && (
+                            <GameClient 
+                                session={currentSession} 
+                                user={user} 
+                                onEnd={() => setView('HOME')} 
+                            />
+                        )}
+
+                        {view === 'LEADERBOARD' && currentSession && (
+                            <LeaderboardView session={currentSession} onBack={() => setView('HOME')} />
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        // --- Admin Panel Component ---
+        function AdminPanel({ onBack, user }) {
+            const [pin, setPin] = useState('');
+            const [isAuthenticated, setIsAuthenticated] = useState(false);
+            const [sessions, setSessions] = useState([]);
+            const [newSessionName, setNewSessionName] = useState('');
+            const [fileContent, setFileContent] = useState('');
+            const [error, setError] = useState('');
+            const [loading, setLoading] = useState(false);
+            const [expandedSessionId, setExpandedSessionId] = useState(null);
+            const [activeTab, setActiveTab] = useState('questions');
+
+            // Editing Questions State
+            const [isEditingQuestions, setIsEditingQuestions] = useState(false);
+            const [editingQuestions, setEditingQuestions] = useState([]);
+
+            // Leaderboard Management State
+            const [adminLeaderboardData, setAdminLeaderboardData] = useState([]);
+            const [editingLeaderboardId, setEditingLeaderboardId] = useState(null);
+            const [editingNickname, setEditingNickname] = useState('');
+
+            useEffect(() => {
+                if (!isAuthenticated || !db) return;
+                const q = query(collection(db, 'sessions'), orderBy('name'));
+                return onSnapshot(q, (snap) => {
+                    const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    setSessions(list);
+                });
+            }, [isAuthenticated, user]);
+
+            // Fetch leaderboard when expanded and tab is leaderboard
+            useEffect(() => {
+                if (!expandedSessionId || activeTab !== 'leaderboard' || !db) return;
+                const q = query(
+                    collection(db, 'leaderboards', expandedSessionId, 'records'),
+                    orderBy('score', 'desc'),
+                    limit(50)
+                );
+                const unsub = onSnapshot(q, (snap) => {
+                    const list = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+                    setAdminLeaderboardData(list);
+                });
+                return unsub;
+            }, [expandedSessionId, activeTab]);
+
+            const handleLogin = async () => {
+                setError("");
+                if (!pin) {
+                    setError("請輸入 PIN 碼");
+                    return;
+                }
+
+                setLoading(true);
+                try {
+                    const docRef = doc(db, 'settings', 'admin');
+                    const docSnap = await getDoc(docRef);
+
+                    if (docSnap.exists()) {
+                        const storedPin = docSnap.data().pin;
+                        if (storedPin === pin) {
+                            setIsAuthenticated(true);
+                            setError("");
+                        } else {
+                            setError("PIN 碼錯誤");
+                        }
+                    } else {
+                        if (pin === "hspsadmin") {
+                            await setDoc(docRef, { pin: "hspsadmin" });
+                            setIsAuthenticated(true);
+                            setError("");
+                            // Using a custom modal style alert instead of browser alert
+                            document.getElementById('root').insertAdjacentHTML('beforeend', `
+                                <div id="custom-alert" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+                                    <div class="bg-white p-6 rounded-lg shadow-xl border-4 border-blue-400">
+                                        <p class="font-bold text-blue-600 mb-4">第一次登入：已自動初始化 Admin PIN 為 'hspsadmin' 於資料庫中。</p>
+                                        <button onclick="document.getElementById('custom-alert').remove()" class="bg-blue-500 text-white px-4 py-2 rounded">確定</button>
+                                    </div>
+                                </div>
+                            `);
+                        } else {
+                            setError("系統尚未初始化，請輸入預設 PIN 碼 (hspsadmin) 以啟用後台。");
+                        }
+                    }
+                } catch (e) {
+                    console.error(e);
+                    setError("驗證失敗，請檢查網路連線");
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    setFileContent(evt.target?.result);
+                    if (error) setError('');
+                };
+                reader.readAsText(file);
+            };
+
+            const createSession = async () => {
+                setError('');
+                
+                if (!newSessionName.trim()) {
+                    setError("⚠️ 請務必填寫「場次名稱」！");
+                    return;
+                }
+                if (!fileContent) {
+                    setError("⚠️ 請上傳題庫檔案！");
+                    return;
+                }
+
+                setLoading(true);
+                try {
+                    const lines = fileContent.split('\n');
+                    const questions = [];
+                    lines.forEach(line => {
+                        const [idiom, def] = line.split(/[:：]/).map(s => s?.trim());
+                        if (idiom && def) questions.push({ idiom, def });
+                    });
+
+                    if (questions.length === 0) throw new Error("題庫格式錯誤或為空");
+
+                    // Use transaction to ensure atomicity for deactivating and activating
+                    await runTransaction(db, async (transaction) => {
+                        // 1. 自動停用其他所有場次
+                        const activeQ = query(collection(db, 'sessions'), where('isActive', '==', true));
+                        const activeSnaps = await getDocs(activeQ);
+                        
+                        activeSnaps.docs.forEach(d => {
+                             transaction.update(doc(db, 'sessions', d.id), { isActive: false });
+                        });
+
+                        // 2. 建立新場次並預設啟用
+                        const newDocRef = doc(collection(db, 'sessions'));
+                        transaction.set(newDocRef, {
+                            name: newSessionName,
+                            questions,
+                            isActive: true, // Auto activate
+                            createdAt: serverTimestamp()
+                        });
+                    });
+
+                    setNewSessionName('');
+                    setFileContent('');
+                    document.getElementById('root').insertAdjacentHTML('beforeend', `
+                        <div id="custom-alert-success" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+                            <div class="bg-white p-6 rounded-lg shadow-xl border-4 border-green-400">
+                                <p class="font-bold text-green-600 mb-4">場次建立成功並已啟用！</p>
+                                <button onclick="document.getElementById('custom-alert-success').remove()" class="bg-green-500 text-white px-4 py-2 rounded">確定</button>
+                            </div>
+                        </div>
+                    `);
+                } catch (err) {
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const toggleActive = async (targetId, e) => {
+                e.stopPropagation(); 
+                try {
+                    await runTransaction(db, async (transaction) => {
+                         const activeQ = query(collection(db, 'sessions'), where('isActive', '==', true));
+                         const activeSnaps = await getDocs(activeQ);
+                         
+                         activeSnaps.docs.forEach(d => {
+                              transaction.update(doc(db, 'sessions', d.id), { isActive: false });
+                         });
+
+                         transaction.update(doc(db, 'sessions', targetId), { isActive: true });
+                    });
+                } catch (e) {
+                    console.error(e);
+                    setError("切換失敗");
+                }
+            };
+
+            const startEditingQuestions = (session) => {
+                setEditingQuestions([...session.questions]);
+                setIsEditingQuestions(true);
+            };
+
+            const saveQuestions = async (sessionId) => {
+                try {
+                    const validQuestions = editingQuestions.filter(q => q.idiom.trim() && q.def.trim());
+                    await updateDoc(doc(db, 'sessions', sessionId), {
+                        questions: validQuestions
+                    });
+                    setIsEditingQuestions(false);
+                } catch (e) {
+                    console.error(e);
+                    document.getElementById('root').insertAdjacentHTML('beforeend', `
+                        <div id="custom-alert-error" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+                            <div class="bg-white p-6 rounded-lg shadow-xl border-4 border-red-400">
+                                <p class="font-bold text-red-600 mb-4">儲存失敗！</p>
+                                <button onclick="document.getElementById('custom-alert-error').remove()" class="bg-red-500 text-white px-4 py-2 rounded">確定</button>
+                            </div>
+                        </div>
+                    `);
+                }
+            };
+
+            const updateLeaderboardNickname = async (sessionId, recordId) => {
+                if (!editingNickname.trim()) return;
+                try {
+                    await updateDoc(doc(db, 'leaderboards', sessionId, 'records', recordId), {
+                        nickname: editingNickname.trim().substring(0, 6)
+                    });
+                    setEditingLeaderboardId(null);
+                    setEditingNickname('');
+                } catch (e) {
+                    console.error(e);
+                    // Use custom modal for alerts
+                    document.getElementById('root').insertAdjacentHTML('beforeend', `
+                        <div id="custom-alert-error" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+                            <div class="bg-white p-6 rounded-lg shadow-xl border-4 border-red-400">
+                                <p class="font-bold text-red-600 mb-4">更新失敗！</p>
+                                <button onclick="document.getElementById('custom-alert-error').remove()" class="bg-red-500 text-white px-4 py-2 rounded">確定</button>
+                            </div>
+                        </div>
+                    `);
+                }
+            };
+
+            if (!isAuthenticated) {
+                return (
+                    <div className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl shadow-lg border-2 border-yellow-200">
+                        <h3 className="text-xl font-bold mb-4 text-gray-700">教師後台登入</h3>
+                        <input 
+                            type="password" 
+                            value={pin}
+                            onChange={e => setPin(e.target.value)}
+                            placeholder="輸入 PIN 碼"
+                            className="p-3 border-2 border-gray-200 rounded-xl mb-4 text-center text-lg w-full"
+                        />
+                        {error && <p className="text-red-500 mb-2 font-bold flex items-center gap-1"><AlertCircle size={16}/> {error}</p>}
+                        <button onClick={handleLogin} disabled={loading} className="w-full py-3 bg-yellow-500 text-white rounded-xl font-bold shadow-md hover:bg-yellow-600 disabled:opacity-50">
+                            {loading ? "驗證中..." : "驗證"}
+                        </button>
+                        <button onClick={onBack} className="mt-4 text-gray-400 underline text-sm">返回</button>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="bg-white p-6 rounded-3xl shadow-lg">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-gray-800">場次管理</h2>
+                        <button onClick={onBack} className="text-gray-500 bg-gray-100 px-3 py-1 rounded-lg">退出</button>
+                    </div>
+
+                    {/* New Session Panel */}
+                    <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200 mb-8">
+                        <h3 className="font-bold text-yellow-800 mb-4 flex items-center gap-2"><Upload size={18}/> 新增場次</h3>
+                        <div className="space-y-3">
+                            <input 
+                                className={`w-full p-2 border rounded-lg ${error && !newSessionName ? 'border-red-500 bg-red-50' : ''}`}
+                                placeholder="場次名稱 (例如: W10 成語測驗)" 
+                                value={newSessionName}
+                                onChange={e => {
+                                    setNewSessionName(e.target.value);
+                                    if (error) setError('');
+                                }}
+                            />
+                            <div className={`border-2 border-dashed rounded-lg p-4 bg-white text-center cursor-pointer relative hover:bg-yellow-50 ${error && !fileContent ? 'border-red-300 bg-red-50' : 'border-yellow-300'}`}>
+                                <input type="file" accept=".txt" onChange={handleFileUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
+                                <p className={`${error && !fileContent ? 'text-red-500' : 'text-yellow-600'} font-bold`}>
+                                    {fileContent ? "✅ 已讀取檔案" : "點擊上傳 .txt 題庫 (格式: 成語:解釋)"}
+                                </p>
+                            </div>
+
+                            {/* Error Message for Create Session */}
+                            {isAuthenticated && error && (
+                                <div className="bg-red-100 border border-red-200 text-red-600 px-3 py-2 rounded-lg text-sm font-bold flex items-center gap-2 animate-pulse">
+                                    <AlertCircle size={16} /> {error}
+                                </div>
+                            )}
+
+                            <button 
+                                disabled={loading}
+                                onClick={createSession} 
+                                className="w-full py-2 bg-green-500 text-white rounded-lg font-bold shadow hover:bg-green-600 disabled:opacity-50"
+                            >
+                                {loading ? "處理中..." : "建立並啟用場次"}
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Sessions List */}
+                    <div>
+                        <h3 className="font-bold text-gray-700 mb-3">場次列表</h3>
+                        <ul className="space-y-2 max-h-[600px] overflow-y-auto">
+                            {sessions.map(s => (
+                                <li key={s.id} className={`rounded-lg border transition-colors ${s.isActive ? 'bg-green-50 border-green-500' : 'bg-gray-50 border-gray-200'}`}>
+                                    <div 
+                                        className="p-3 flex justify-between items-center cursor-pointer hover:bg-black/5 rounded-t-lg"
+                                        onClick={() => {
+                                            if (expandedSessionId === s.id) {
+                                                setExpandedSessionId(null);
+                                                setIsEditingQuestions(false);
+                                            } else {
+                                                setExpandedSessionId(s.id);
+                                                setIsEditingQuestions(false);
+                                                setActiveTab('questions');
+                                            }
+                                        }}
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            {expandedSessionId === s.id ? <ChevronUp size={16} className="text-gray-400"/> : <ChevronDown size={16} className="text-gray-400"/>}
+                                            <div>
+                                                <span className="font-bold text-gray-800 block">{s.name}</span>
+                                                <span className="text-xs text-gray-500 block">{s.questions?.length || 0} 題</span>
+                                            </div>
+                                        </div>
+                                        <button 
+                                            onClick={(e) => toggleActive(s.id, e)}
+                                            className={`px-3 py-1 rounded-full text-sm font-bold ${s.isActive ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500 hover:bg-gray-300'}`}
+                                        >
+                                            {s.isActive ? '進行中' : '啟用'}
+                                        </button>
+                                    </div>
+                                    
+                                    {/* Expanded Detail Panel */}
+                                    {expandedSessionId === s.id && (
+                                        <div className="border-t border-gray-200 bg-white/50 animate-fade-in">
+                                            
+                                            {/* Tabs */}
+                                            <div className="flex border-b border-gray-200">
+                                                <button 
+                                                    onClick={() => { setActiveTab('questions'); setIsEditingQuestions(false); }}
+                                                    className={`flex-1 py-2 font-bold text-sm ${activeTab === 'questions' ? 'bg-white text-blue-600 border-b-2 border-blue-500' : 'text-gray-500 hover:bg-gray-50'}`}
+                                                >
+                                                    題目列表
+                                                </button>
+                                                <button 
+                                                    onClick={() => setActiveTab('leaderboard')}
+                                                    className={`flex-1 py-2 font-bold text-sm flex items-center justify-center gap-1 ${activeTab === 'leaderboard' ? 'bg-white text-orange-600 border-b-2 border-orange-500' : 'text-gray-500 hover:bg-gray-50'}`}
+                                                >
+                                                    <Trophy size={14}/> 排行榜管理
+                                                </button>
+                                            </div>
+
+                                            {/* Questions Tab Content */}
+                                            {activeTab === 'questions' && (
+                                                <div className="p-3">
+                                                    {!isEditingQuestions ? (
+                                                        <>
+                                                            <div className="flex justify-between items-center mb-2">
+                                                                <span className="text-xs font-bold text-gray-400">總計 {s.questions.length} 題</span>
+                                                                <button 
+                                                                    onClick={() => startEditingQuestions(s)}
+                                                                    className="flex items-center gap-1 text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded hover:bg-blue-200 font-bold"
+                                                                >
+                                                                    <Edit2 size={12}/> 修改題目
+                                                                </button>
+                                                            </div>
+                                                            <ul className="space-y-1 max-h-60 overflow-y-auto pl-2 text-sm">
+                                                                {s.questions?.map((q, idx) => (
+                                                                    <li key={idx} className="flex gap-2">
+                                                                        <span className="font-bold text-gray-700 whitespace-nowrap">[{q.idiom}]</span>
+                                                                        <span className="text-gray-600">{q.def}</span>
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                        </>
+                                                    ) : (
+                                                        <div className="bg-blue-50 p-2 rounded-lg">
+                                                            <div className="flex justify-between items-center mb-2">
+                                                                <h4 className="font-bold text-blue-800 text-sm">編輯模式</h4>
+                                                                <div className="flex gap-2">
+                                                                    <button onClick={() => setIsEditingQuestions(false)} className="text-xs text-gray-500 underline">取消</button>
+                                                                    <button 
+                                                                        onClick={() => saveQuestions(s.id)}
+                                                                        className="flex items-center gap-1 text-xs bg-blue-600 text-white px-3 py-1 rounded shadow hover:bg-blue-700 font-bold"
+                                                                    >
+                                                                        <Save size={12}/> 儲存
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                            <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
+                                                                {editingQuestions.map((q, idx) => (
+                                                                    <div key={idx} className="flex gap-2 items-center">
+                                                                        <input 
+                                                                            value={q.idiom} 
+                                                                            onChange={(e) => {
+                                                                                const newQ = [...editingQuestions];
+                                                                                newQ[idx].idiom = e.target.value;
+                                                                                setEditingQuestions(newQ);
+                                                                            }}
+                                                                            className="w-24 p-1 border rounded text-sm font-bold"
+                                                                            placeholder="成語"
+                                                                        />
+                                                                        <input 
+                                                                            value={q.def}
+                                                                            onChange={(e) => {
+                                                                                const newQ = [...editingQuestions];
+                                                                                newQ[idx].def = e.target.value;
+                                                                                setEditingQuestions(newQ);
+                                                                            }}
+                                                                            className="flex-1 p-1 border rounded text-sm"
+                                                                            placeholder="解釋"
+                                                                        />
+                                                                        <button 
+                                                                            onClick={() => {
+                                                                                const newQ = editingQuestions.filter((_, i) => i !== idx);
+                                                                                setEditingQuestions(newQ);
+                                                                            }}
+                                                                            className="text-red-400 hover:text-red-600"
+                                                                        >
+                                                                            <Trash2 size={16}/>
+                                                                        </button>
+                                                                    </div>
+                                                                ))}
+                                                                <button 
+                                                                    onClick={() => setEditingQuestions([...editingQuestions, {idiom: '', def: ''}])}
+                                                                    className="w-full py-1 border-2 border-dashed border-blue-200 text-blue-400 rounded hover:bg-blue-100 flex items-center justify-center gap-1 text-xs font-bold"
+                                                                >
+                                                                    <Plus size={14}/> 新增一題
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* Leaderboard Tab Content */}
+                                            {activeTab === 'leaderboard' && (
+                                                <div className="p-3">
+                                                    <h4 className="text-xs font-bold text-gray-400 mb-2 uppercase">點擊筆圖示可修改不雅暱稱</h4>
+                                                    <div className="max-h-60 overflow-y-auto">
+                                                        <table className="w-full text-sm">
+                                                            <thead className="text-left text-gray-500 border-b">
+                                                                <tr>
+                                                                    <th className="pb-1 pl-2">排名</th>
+                                                                    <th className="pb-1">暱稱</th>
+                                                                    <th className="pb-1">分數</th>
+                                                                    <th className="pb-1 text-right pr-2">管理</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-gray-100">
+                                                                {adminLeaderboardData.map((entry, idx) => (
+                                                                    <tr key={entry.id} className="group hover:bg-gray-50">
+                                                                        <td className="py-2 pl-2 font-bold text-gray-400">{idx + 1}</td>
+                                                                        <td className="py-2 font-bold text-gray-700">
+                                                                            {editingLeaderboardId === entry.id ? (
+                                                                                <div className="flex items-center gap-1">
+                                                                                    <input 
+                                                                                        value={editingNickname}
+                                                                                        onChange={e => setEditingNickname(e.target.value)}
+                                                                                        className="w-24 border rounded px-1 py-0.5"
+                                                                                        maxLength={6}
+                                                                                    />
+                                                                                </div>
+                                                                            ) : (
+                                                                                entry.nickname
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="py-2 text-green-600 font-mono">{entry.score}</td>
+                                                                        <td className="py-2 text-right pr-2">
+                                                                            {editingLeaderboardId === entry.id ? (
+                                                                                <div className="flex justify-end gap-1">
+                                                                                    <button onClick={() => updateLeaderboardNickname(s.id, entry.id)} className="text-green-500 hover:text-green-700 bg-green-50 p-1 rounded"><Save size={14}/></button>
+                                                                                    <button onClick={() => setEditingLeaderboardId(null)} className="text-gray-400 hover:text-gray-600 bg-gray-100 p-1 rounded"><X size={14}/></button>
+                                                                                </div>
+                                                                            ) : (
+                                                                                <button 
+                                                                                    onClick={() => {
+                                                                                        setEditingLeaderboardId(entry.id);
+                                                                                        setEditingNickname(entry.nickname);
+                                                                                    }}
+                                                                                    className="text-gray-300 hover:text-blue-500 p-1 rounded hover:bg-blue-50"
+                                                                                >
+                                                                                    <Edit2 size={14}/>
+                                                                                </button>
+                                                                            )}
+                                                                        </td>
+                                                                    </tr>
+                                                                ))}
+                                                                {adminLeaderboardData.length === 0 && (
+                                                                    <tr><td colSpan={4} className="text-center py-4 text-gray-400">目前無排名資料</td></tr>
+                                                                )}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                        </div>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Game Logic Component ---
+        function GameClient({ session, user, onEnd }) {
+            const canvasRef = useRef(null);
+            const [questions, setQuestions] = useState([]);
+            const [qIndex, setQIndex] = useState(0);
+            const [score, setScore] = useState(0);
+            const [gameState, setGameState] = useState('MENU');
+            const [showResultModal, setShowResultModal] = useState(false);
+            
+            // Game Refs for loop
+            const snake = useRef([{ x: 5, y: 10, char: '' }, { x: 4, y: 10, char: '' }, { x: 3, y: 10, char: '' }]);
+            const direction = useRef({ x: 1, y: 0 }); // Moving right
+            const nextDirection = useRef({ x: 1, y: 0 });
+            const foodItems = useRef([]);
+            const lastTime = useRef(0);
+            const stunTimer = useRef(0);
+            const targetCharIndex = useRef(0); // Which character of the idiom we need next
+            
+            // Prepare Questions
+            useEffect(() => {
+                // Shuffle and pick 5
+                if (session.questions.length === 0) return;
+                const shuffled = [...session.questions].sort(() => 0.5 - Math.random()).slice(0, 5);
+                setQuestions(shuffled);
+                setGameState('PLAYING');
+                initLevel(shuffled[0]);
+            }, [session.questions]);
+
+            const initLevel = (q) => {
+                if (!q) return;
+                snake.current = [{ x: 5, y: 10, char: '' }, { x: 4, y: 10, char: '' }, { x: 3, y: 10, char: '' }];
+                direction.current = { x: 1, y: 0 };
+                nextDirection.current = { x: 1, y: 0 };
+                targetCharIndex.current = 0;
+                spawnFood(q);
+            };
+
+            const spawnFood = (q) => {
+                // Correct chars + random distractors
+                const chars = q.idiom.split('');
+                const distractors = "的一是了不人在有我他這中大來上國個到說們為子和你地出道也時年得就那要下以生會自著去之過家學對可里後小麼心多天而能好都然沒日於起還發成事只作當想看文無開手十用主行方又如前本見經頭公同三已老從動兩長知民樣現分將外但身些與高意進把法此實回二理今明問力最".split('');
+                
+                const items = [];
+                // Add correct chars
+                chars.forEach(c => items.push(c));
+                // Add 6 distractors
+                for (let i = 0; i < 6; i++) items.push(distractors[Math.floor(Math.random() * distractors.length)]);
+
+                // Randomize positions on grid
+                const placedItems = [];
+                const width = CANVAS_WIDTH_PC / GRID_SIZE; // Dynamic calculation
+                const height = CANVAS_HEIGHT_PC / GRID_SIZE; // Dynamic calculation
+
+                items.forEach(char => {
+                    let x, y, conflict;
+                    do {
+                        conflict = false;
+                        x = Math.floor(Math.random() * (width - 2)) + 1;
+                        y = Math.floor(Math.random() * (height - 2)) + 1;
+                        // Check snake
+                        if (snake.current.some(s => s.x === x && s.y === y)) conflict = true;
+                        // Check existing food
+                        if (placedItems.some(f => f.x === x && f.y === y)) conflict = true;
+                    } while (conflict);
+                    placedItems.push({ x, y, char });
+                });
+                foodItems.current = placedItems;
+            };
+
+            const handleInput = useCallback((key) => {
+                if (gameState !== 'PLAYING' || stunTimer.current > 0) return;
+                
+                const currentDir = direction.current;
+                let newDir = { x: 0, y: 0 };
+
+                switch(key) {
+                    case 'ArrowUp': newDir = { x: 0, y: -1 }; break;
+                    case 'ArrowDown': newDir = { x: 0, y: 1 }; break;
+                    case 'ArrowLeft': newDir = { x: -1, y: 0 }; break;
+                    case 'ArrowRight': newDir = { x: 1, y: 0 }; break;
+                    default: return;
+                }
+
+                // Prevent reversing
+                if (currentDir.x !== 0 && newDir.x === -currentDir.x) return;
+                if (currentDir.y !== 0 && newDir.y === -currentDir.y) return;
+
+                nextDirection.current = newDir;
+            }, [gameState]);
+
+            useEffect(() => {
+                const handleKeyDown = (e) => handleInput(e.key);
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [handleInput]);
+
+            // Main Loop
+            useEffect(() => {
+                let animationFrameId;
+                
+                const loop = (timestamp) => {
+                    if (!lastTime.current) lastTime.current = timestamp;
+                    const deltaTime = timestamp - lastTime.current;
+
+                    if (gameState === 'PLAYING') {
+                        // Stun logic
+                        if (stunTimer.current > 0) {
+                            stunTimer.current -= deltaTime;
+                            if (stunTimer.current <= 0) stunTimer.current = 0;
+                        } else if (deltaTime >= GAME_SPEED) {
+                            update();
+                            lastTime.current = timestamp;
+                        }
+                    }
+                    
+                    draw();
+                    animationFrameId = requestAnimationFrame(loop);
+                };
+
+                animationFrameId = requestAnimationFrame(loop);
+                return () => cancelAnimationFrame(animationFrameId);
+            }, [gameState, qIndex, questions]); 
+
+            const update = () => {
+                if (!questions[qIndex]) return;
+
+                direction.current = nextDirection.current;
+                const head = { ...snake.current[0] };
+                head.x += direction.current.x;
+                head.y += direction.current.y;
+
+                const gridW = CANVAS_WIDTH_PC / GRID_SIZE;
+                const gridH = CANVAS_HEIGHT_PC / GRID_SIZE;
+
+                // Wall Collision -> Stun
+                if (head.x < 0 || head.x >= gridW || head.y < 0 || head.y >= gridH) {
+                    playSound('faint');
+                    stunTimer.current = 1500; // 1.5s stun
+                    
+                    const safeX = Math.floor(gridW/2);
+                    const safeY = Math.floor(gridH/2);
+                    
+                    const offsetX = safeX - snake.current[0].x;
+                    const offsetY = safeY - snake.current[0].y;
+                    
+                    // Move whole snake to center
+                    snake.current = snake.current.map(s => ({
+                        ...s, x: s.x + offsetX, y: s.y + offsetY
+                    }));
+                    // Reset direction to avoid immediate recrash
+                    direction.current = { x: 0, y: 0 }; 
+                    nextDirection.current = { x: 0, y: 0 };
+                    setScore(s => Math.max(0, s - 5)); // Penalty
+                    return;
+                }
+
+                // Eat Food Logic
+                const eatenIndex = foodItems.current.findIndex(f => f.x === head.x && f.y === head.y);
+                let justEatenChar = '';
+
+                if (eatenIndex !== -1) {
+                    const food = foodItems.current[eatenIndex];
+                    const targetIdiom = questions[qIndex].idiom;
+                    const neededChar = targetIdiom[targetCharIndex.current];
+
+                    if (food.char === neededChar) {
+                        // Correct!
+                        playSound('eat');
+                        setScore(s => s + 10);
+                        targetCharIndex.current++;
+                        justEatenChar = food.char;
+                        foodItems.current.splice(eatenIndex, 1);
+                        
+                        // Check Level Complete
+                        if (targetCharIndex.current >= targetIdiom.length) {
+                            playSound('win');
+                            setTimeout(() => {
+                                if (qIndex + 1 < questions.length) {
+                                    setQIndex(i => i + 1);
+                                    initLevel(questions[qIndex + 1]);
+                                } else {
+                                    setGameState('VICTORY');
+                                    setShowResultModal(true);
+                                }
+                            }, 500);
+                        }
+                    } else {
+                        // Wrong!
+                        playSound('wrong');
+                        stunTimer.current = 1000;
+                        setScore(s => Math.max(0, s - 5));
+                        
+                        // Relocate wrong food
+                        const width = CANVAS_WIDTH_PC / GRID_SIZE;
+                        const height = CANVAS_HEIGHT_PC / GRID_SIZE;
+                        let newX, newY, conflict;
+                        
+                        do {
+                            conflict = false;
+                            newX = Math.floor(Math.random() * (width - 2)) + 1;
+                            newY = Math.floor(Math.random() * (height - 2)) + 1;
+                            
+                            if (snake.current.some(s => s.x === newX && s.y === newY)) conflict = true;
+                            if (foodItems.current.some((f, i) => i !== eatenIndex && f.x === newX && f.y === newY)) conflict = true;
+                            
+                        } while (conflict);
+
+                        foodItems.current[eatenIndex].x = newX;
+                        foodItems.current[eatenIndex].y = newY;
+                        return; 
+                    }
+                } else {
+                    if (!justEatenChar) {
+                        snake.current.pop();
+                    }
+                }
+
+                // Self Collision
+                if (snake.current.some(s => s.x === head.x && s.y === head.y)) {
+                    playSound('faint');
+                    stunTimer.current = 1000;
+                    snake.current = snake.current.slice(0, 1);
+                    return;
+                }
+
+                // Add new head
+                snake.current.unshift({ ...head, char: justEatenChar });
+            };
+
+            const draw = () => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return;
+
+                // Clear
+                ctx.fillStyle = COLORS.bg;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Grid (Notebook style)
+                ctx.strokeStyle = COLORS.grid;
+                ctx.lineWidth = 1;
+                for(let x=0; x<=canvas.width; x+=GRID_SIZE) {
+                    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+                }
+                for(let y=0; y<=canvas.height; y+=GRID_SIZE) {
+                    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+                }
+
+                // Food
+                ctx.font = 'bold 20px "Noto Sans TC", sans-serif'; 
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                foodItems.current.forEach(f => {
+                    // Draw food bubble
+                    ctx.fillStyle = COLORS.food;
+                    ctx.beginPath();
+                    ctx.arc(f.x * GRID_SIZE + GRID_SIZE/2, f.y * GRID_SIZE + GRID_SIZE/2, GRID_SIZE/2 - 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    // Draw text
+                    ctx.fillStyle = COLORS.foodText;
+                    ctx.fillText(f.char, f.x * GRID_SIZE + GRID_SIZE/2, f.y * GRID_SIZE + GRID_SIZE/2 + 2);
+                });
+
+                // Snake
+                snake.current.forEach((s, i) => {
+                    const cx = s.x * GRID_SIZE + GRID_SIZE/2;
+                    const cy = s.y * GRID_SIZE + GRID_SIZE/2;
+                    
+                    ctx.fillStyle = i === 0 ? COLORS.snakeHead : COLORS.snakeBody;
+                    
+                    // Stun effect
+                    if (stunTimer.current > 0) {
+                        ctx.fillStyle = (Math.floor(Date.now() / 100) % 2 === 0) ? '#9CA3AF' : ctx.fillStyle;
+                    }
+
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, GRID_SIZE/2 - 1, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Draw collected char on body
+                    if (s.char) {
+                        ctx.fillStyle = '#FFFFFF';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.font = '16px "Noto Sans TC", sans-serif'; 
+                        ctx.fillText(s.char, cx, cy + 2); 
+                    }
+                    
+                    // Eyes for head
+                    if (i === 0) {
+                        ctx.fillStyle = '#fff';
+                        ctx.beginPath(); ctx.arc(cx - 6, cy - 6, 3, 0, Math.PI*2); ctx.fill(); 
+                        ctx.beginPath(); ctx.arc(cx + 6, cy - 6, 3, 0, Math.PI*2); ctx.fill();
+                    }
+                });
+            };
+
+            return (
+                <div className="flex flex-col items-center w-full max-w-2xl mx-auto">
+                    {/* Game HUD */}
+                    <div className="w-full bg-white p-4 rounded-t-3xl border-x-4 border-t-4 border-yellow-300 shadow-sm flex justify-between items-center">
+                        <div className="flex flex-col">
+                            <span className="text-xs font-bold text-gray-400">分數</span>
+                            <span className="text-2xl font-black text-yellow-600">{score}</span>
+                        </div>
+                        <div className="text-center">
+                            <span className="text-xs font-bold text-gray-400">題目 {qIndex + 1}/5</span>
+                            <h3 className="text-xl font-bold text-gray-800">
+                                {questions[qIndex]?.def || "載入中..."}
+                            </h3>
+                            <div className="flex gap-1 justify-center mt-1">
+                                {/* Target Idiom Progress */}
+                                {questions[qIndex]?.idiom.split('').map((c, i) => (
+                                    <span key={i} className={`w-6 h-6 flex items-center justify-center rounded border ${i < targetCharIndex.current ? 'bg-green-500 text-white border-green-600' : 'bg-gray-100 text-gray-300'}`}>
+                                        {i < targetCharIndex.current ? c : '?'}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <button onClick={onEnd} className="p-2 text-gray-400 hover:text-red-500"><RotateCcw size={20} /></button>
+                        </div>
+                    </div>
+
+                    {/* Canvas Container */}
+                    <div id="game-canvas-container" className="relative border-4 border-yellow-300 bg-white shadow-inner">
+                        {gameState === 'STUNNED' && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/20 z-10">
+                                <span className="text-4xl">😵💫</span>
+                            </div>
+                        )}
+                        <canvas 
+                            ref={canvasRef}
+                            width={CANVAS_WIDTH_PC}
+                            height={CANVAS_HEIGHT_PC}
+                        />
+                    </div>
+
+                    {/* Mobile Controls */}
+                    <div className="w-full mt-6 grid grid-cols-3 gap-2 px-8 max-w-sm md:hidden pb-8">
+                        <div className="col-start-2">
+                            <DButton icon={<ArrowUp size={32} />} onClick={() => handleInput('ArrowUp')} />
+                        </div>
+                        <div className="col-start-1 row-start-2">
+                            <DButton icon={<ArrowLeft size={32} />} onClick={() => handleInput('ArrowLeft')} />
+                        </div>
+                        <div className="col-start-2 row-start-2">
+                            <DButton icon={<ArrowDown size={32} />} onClick={() => handleInput('ArrowDown')} />
+                        </div>
+                        <div className="col-start-3 row-start-2">
+                            <DButton icon={<ArrowRight size={32} />} onClick={() => handleInput('ArrowRight')} />
+                        </div>
+                    </div>
+
+                    {/* Desktop Hint */}
+                    <div className="hidden md:flex items-center gap-2 text-gray-400 mt-4 text-sm font-bold">
+                        使用鍵盤方向鍵 <div className="flex gap-1"><span className="border px-1 rounded">↑</span><span className="border px-1 rounded">↓</span><span className="border px-1 rounded">←</span><span className="border px-1 rounded">→</span></div> 控制移動
+                    </div>
+
+                    {/* Victory Modal */}
+                    {showResultModal && (
+                        <VictoryModal 
+                            score={score} 
+                            session={session} 
+                            user={user} 
+                            onClose={onEnd} 
+                        />
+                    )}
+                </div>
+            );
+        }
+
+        const DButton = ({ icon, onClick }) => (
+            <button 
+                className="w-full aspect-square bg-yellow-400/80 rounded-2xl d-button active:bg-yellow-500 text-white flex items-center justify-center touch-manipulation"
+                onTouchStart={(e) => { e.preventDefault(); onClick(); }}
+                onClick={(e) => { e.preventDefault(); onClick(); }}
+            >
+                {icon}
+            </button>
+        );
+
+        // --- Leaderboard Logic & Modal ---
+        function VictoryModal({ score, session, user, onClose }) {
+            const [isHighscore, setIsHighscore] = useState(false);
+            const [nickname, setNickname] = useState('');
+            const [submitted, setSubmitted] = useState(false);
+
+            useEffect(() => {
+                if (!db) return;
+                // Check if score is top 3
+                const checkRank = async () => {
+                    const q = query(collection(db, 'leaderboards', session.id, 'records'), orderBy('score', 'desc'), limit(3));
+                    const snap = await getDocs(q);
+                    
+                    let qualify = false;
+                    if (snap.size < 3) {
+                        qualify = true;
+                    } else {
+                        const lowestTop3 = snap.docs[snap.size - 1].data().score;
+                        if (score > lowestTop3) qualify = true;
+                    }
+
+                    if (score > 0 && qualify) setIsHighscore(true);
+                };
+                checkRank();
+            }, [score, session.id]);
+
+            const submitScore = async () => {
+                if (!nickname.trim()) return;
+                try {
+                    await setDoc(doc(db, 'leaderboards', session.id, 'records', user.uid), {
+                        nickname: nickname.substring(0, 6),
+                        score,
+                        uid: user.uid,
+                        timestamp: serverTimestamp()
+                    });
+                    setSubmitted(true);
+                    playSound('win');
+                } catch (e) {
+                    console.error(e);
+                    // Use custom modal for alerts
+                    document.getElementById('root').insertAdjacentHTML('beforeend', `
+                        <div id="custom-alert-error" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+                            <div class="bg-white p-6 rounded-lg shadow-xl border-4 border-red-400">
+                                <p class="font-bold text-red-600 mb-4">上傳失敗！</p>
+                                <button onclick="document.getElementById('custom-alert-error').remove()" class="bg-red-500 text-white px-4 py-2 rounded">確定</button>
+                            </div>
+                        </div>
+                    `);
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl p-6 w-full max-w-sm border-4 border-yellow-400 shadow-2xl animate-bounce-in text-center relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-full h-4 bg-yellow-400"></div>
+                        
+                        <h2 className="text-3xl font-black text-yellow-600 mb-2">🎉 遊戲結束！</h2>
+                        <p className="text-gray-500 font-bold text-lg mb-6">總分：<span className="text-4xl text-green-500">{score}</span></p>
+
+                        {!submitted && isHighscore ? (
+                            <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200 mb-4">
+                                <p className="text-orange-500 font-bold mb-2">🏆 恭喜進入排行榜！</p>
+                                <input 
+                                    placeholder="輸入暱稱 (最多6字)" 
+                                    maxLength={6}
+                                    value={nickname}
+                                    onChange={e => setNickname(e.target.value)}
+                                    className="w-full text-center p-2 border-2 border-orange-200 rounded-lg text-lg mb-2"
+                                />
+                                <button 
+                                    onClick={submitScore}
+                                    className="w-full py-2 bg-orange-500 text-white font-bold rounded-lg shadow hover:bg-orange-600"
+                                >
+                                    登記成績
+                                </button>
+                            </div>
+                        ) : (
+                            <p className="mb-6 text-gray-400 font-bold">{submitted ? "成績已登記！" : "再接再厲！"}</p>
+                        )}
+
+                        <button onClick={onClose} className="w-full py-3 bg-gray-100 text-gray-600 font-bold rounded-xl hover:bg-gray-200">
+                            返回首頁
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        function LeaderboardView({ session, onBack }) {
+            const [leaders, setLeaders] = useState([]);
+
+            useEffect(() => {
+                if (!db) return;
+                const q = query(
+                    collection(db, 'leaderboards', session.id, 'records'), 
+                    orderBy('score', 'desc'), 
+                    limit(10)
+                );
+                return onSnapshot(q, (snap) => {
+                    setLeaders(snap.docs.map(d => d.data()));
+                });
+            }, [session.id]);
+
+            return (
+                <div className="bg-white p-6 rounded-3xl shadow-lg w-full max-w-md mx-auto min-h-[50vh]">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-yellow-600 flex items-center gap-2">
+                            <Trophy className="text-yellow-500" /> 排行榜
+                        </h2>
+                        <button onClick={onBack} className="text-gray-400 font-bold">關閉</button>
+                    </div>
+                    
+                    <div className="bg-orange-50 rounded-xl p-4">
+                        <h3 className="text-center font-bold text-orange-800 mb-4 border-b border-orange-200 pb-2">{session.name}</h3>
+                        {leaders.length === 0 ? (
+                            <div className="text-center text-gray-400 py-8">尚無紀錄，快來挑戰！</div>
+                        ) : (
+                            <ul className="space-y-3">
+                                {leaders.map((entry, idx) => (
+                                    <li key={idx} className="flex items-center justify-between bg-white p-3 rounded-lg shadow-sm border border-orange-100">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`
+                                                w-8 h-8 rounded-full flex items-center justify-center font-black text-white
+                                                ${idx === 0 ? 'bg-yellow-400' : idx === 1 ? 'bg-gray-400' : idx === 2 ? 'bg-orange-400' : 'bg-blue-200'}
+                                            `}>
+                                                {idx + 1}
+                                            </div>
+                                            <span className="font-bold text-gray-700">{entry.nickname}</span>
+                                        </div>
+                                        <span className="font-mono font-bold text-green-600 text-lg">{entry.score}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+    </script>
+</body>
+</html>
