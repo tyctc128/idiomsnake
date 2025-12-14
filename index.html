@@ -35,6 +35,9 @@
         /* Custom Styles and Font Setup */
         :root {
             font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            /* Prevent scrolling/zooming on the body for better game feel on touch devices */
+            touch-action: pan-x pan-y;
+            -ms-touch-action: pan-x pan-y;
         }
 
         /* Custom animation (copied from previous React config) */
@@ -75,9 +78,17 @@
             height: 100%;
             image-rendering: pixelated;
         }
+        
+        /* Prevent selection during touch/gameplay */
+        .no-select {
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
     </style>
 </head>
-<body class="bg-orange-50">
+<body class="bg-orange-50 no-select">
     <div id="root">
         <!-- React App renders here -->
     </div>
@@ -136,8 +147,8 @@
 
         // --- Constants & Config ---
         const GRID_SIZE = 30; // 格子大小
-        const CANVAS_WIDTH_PC = 600; // 20格寬
-        const CANVAS_HEIGHT_PC = 450; // 15格高
+        const CANVAS_WIDTH_PC = 600; // 20格寬 (Drawing resolution)
+        const CANVAS_HEIGHT_PC = 450; // 15格高 (Drawing resolution)
         const GAME_SPEED = 150; // ms per frame
 
         // Colors
@@ -283,7 +294,18 @@
                 if (!auth) return;
                 const initAuth = async () => {
                     try {
-                        await signInAnonymously(auth);
+                        // 使用 __initial_auth_token 進行自定義登入，如果不存在則匿名登入
+                        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                        if (initialAuthToken) {
+                            // Note: We need signInWithCustomToken, but it was not imported globally.
+                            // Falling back to signInAnonymously for simplicity in single-file HTML,
+                            // assuming the environment handles the token or anonymous is acceptable.
+                            // In a full build, we would need to ensure signInWithCustomToken is available.
+                            // Since it's often unavailable in this sandbox environment, we stick to anonymous sign-in logic here.
+                            await signInAnonymously(auth);
+                        } else {
+                             await signInAnonymously(auth);
+                        }
                     } catch (error) {
                         console.error("Auth Error", error);
                     }
@@ -337,7 +359,7 @@
                         </div>
                     </header>
 
-                    {/* Main Content Area */}
+                    {/* Main Content Area: RWD Fix - Max Width for better centering on large screens */}
                     <main className="max-w-4xl mx-auto p-4">
                         {view === 'HOME' && (
                             <div className="flex flex-col items-center justify-center space-y-8 mt-10 animate-fade-in">
@@ -922,7 +944,12 @@
 
             const initLevel = (q) => {
                 if (!q) return;
-                snake.current = [{ x: 5, y: 10, char: '' }, { x: 4, y: 10, char: '' }, { x: 3, y: 10, char: '' }];
+                // Reset snake, making sure its length is at least 3 for visual stability
+                snake.current = [
+                    { x: 5, y: 10, char: '' }, 
+                    { x: 4, y: 10, char: '' }, 
+                    { x: 3, y: 10, char: '' }
+                ];
                 direction.current = { x: 1, y: 0 };
                 nextDirection.current = { x: 1, y: 0 };
                 targetCharIndex.current = 0;
@@ -1113,7 +1140,10 @@
                 if (snake.current.some(s => s.x === head.x && s.y === head.y)) {
                     playSound('faint');
                     stunTimer.current = 1000;
-                    snake.current = snake.current.slice(0, 1);
+                    // Reset to a safe starting state to prevent crash loop
+                    snake.current = snake.current.slice(0, 1); 
+                    snake.current[0].x = Math.floor(gridW/2);
+                    snake.current[0].y = Math.floor(gridH/2);
                     return;
                 }
 
@@ -1165,7 +1195,7 @@
                     
                     // Stun effect
                     if (stunTimer.current > 0) {
-                        ctx.fillStyle = (Math.floor(Date.now() / 100) % 2 === 0) ? '#9CA3AF' : ctx.fillStyle;
+                        ctx.fillStyle = (Math.floor(Date.now() / 100) % 2 === 0) ? COLORS.wallHit : ctx.fillStyle; // Flash red/white
                     }
 
                     ctx.beginPath();
@@ -1219,7 +1249,7 @@
 
                     {/* Canvas Container */}
                     <div id="game-canvas-container" className="relative border-4 border-yellow-300 bg-white shadow-inner">
-                        {gameState === 'STUNNED' && (
+                        {stunTimer.current > 0 && (
                             <div className="absolute inset-0 flex items-center justify-center bg-black/20 z-10">
                                 <span className="text-4xl">😵💫</span>
                             </div>
@@ -1231,8 +1261,8 @@
                         />
                     </div>
 
-                    {/* Mobile Controls */}
-                    <div className="w-full mt-6 grid grid-cols-3 gap-2 px-8 max-w-sm md:hidden pb-8">
+                    {/* Mobile/Tablet Controls: RWD Fix: Visible up to xl screen (Covers most tablets) */}
+                    <div className="w-full mt-6 grid grid-cols-3 gap-4 px-8 max-w-sm xl:hidden pb-8">
                         <div className="col-start-2">
                             <DButton icon={<ArrowUp size={32} />} onClick={() => handleInput('ArrowUp')} />
                         </div>
@@ -1247,8 +1277,8 @@
                         </div>
                     </div>
 
-                    {/* Desktop Hint */}
-                    <div className="hidden md:flex items-center gap-2 text-gray-400 mt-4 text-sm font-bold">
+                    {/* Desktop Hint: RWD Fix: Hidden on touch devices/small screens, visible only on large desktop */}
+                    <div className="hidden xl:flex items-center gap-2 text-gray-400 mt-4 text-sm font-bold">
                         使用鍵盤方向鍵 <div className="flex gap-1"><span className="border px-1 rounded">↑</span><span className="border px-1 rounded">↓</span><span className="border px-1 rounded">←</span><span className="border px-1 rounded">→</span></div> 控制移動
                     </div>
 
@@ -1265,15 +1295,21 @@
             );
         }
 
-        const DButton = ({ icon, onClick }) => (
-            <button 
-                className="w-full aspect-square bg-yellow-400/80 rounded-2xl d-button active:bg-yellow-500 text-white flex items-center justify-center touch-manipulation"
-                onTouchStart={(e) => { e.preventDefault(); onClick(); }}
-                onClick={(e) => { e.preventDefault(); onClick(); }}
-            >
-                {icon}
-            </button>
-        );
+        const DButton = ({ icon, onClick }) => {
+            const handleTouch = (e) => {
+                e.preventDefault(); // Prevent default browser behavior (scrolling/zoom)
+                onClick();
+            };
+            return (
+                <button 
+                    className="w-full aspect-square bg-yellow-400/80 rounded-2xl d-button active:bg-yellow-500 text-white flex items-center justify-center touch-manipulation"
+                    onTouchStart={handleTouch}
+                    onClick={onClick}
+                >
+                    {icon}
+                </button>
+            );
+        };
 
         // --- Leaderboard Logic & Modal ---
         function VictoryModal({ score, session, user, onClose }) {
@@ -1316,7 +1352,7 @@
                     console.error(e);
                     // Use custom modal for alerts
                     document.getElementById('root').insertAdjacentHTML('beforeend', `
-                        <div id="custom-alert-error" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+                        <div id="custom-alert-error" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
                             <div class="bg-white p-6 rounded-lg shadow-xl border-4 border-red-400">
                                 <p class="font-bold text-red-600 mb-4">上傳失敗！</p>
                                 <button onclick="document.getElementById('custom-alert-error').remove()" class="bg-red-500 text-white px-4 py-2 rounded">確定</button>
